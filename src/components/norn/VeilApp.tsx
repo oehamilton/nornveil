@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { CardBack, CardDetail, CardFace } from "@/components/norn/TarotCard";
+import { CardBack, CardDetail, CardFace, CardZoom } from "@/components/norn/TarotCard";
 import { RuneGuide } from "@/components/norn/RuneGuide";
 import { RuneBoard } from "@/components/norn/RuneBoard";
 import { DECK, cardById } from "@/norn/cards";
@@ -286,6 +286,9 @@ function Landing({
   onOpenToday: () => void;
   onReset: () => void;
 }) {
+  const [peek, setPeek] = useState<string | null>(null);
+  const peekCard = peek ? cardById(peek) : null;
+  const hallPlates = ["great-00", "great-01", "great-13", "great-21", "great-15", "great-24"];
   return (
     <section className="grid gap-10 pt-6 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
       <div>
@@ -348,12 +351,20 @@ function Landing({
           ))}
         </div>
         <ul className="mt-2 grid grid-cols-3 gap-2 sm:gap-3">
-          {["great-00", "great-01", "great-13", "great-21", "great-15", "great-24"].map((id) => (
+          {hallPlates.map((id) => (
             <li key={id} className="aspect-[2/3]">
-              <CardFace card={cardById(id)} />
+              <button
+                type="button"
+                className="h-full w-full rounded-[10px] border-0 bg-transparent p-0 shadow-lg transition-transform duration-150 hover:scale-[1.03]"
+                aria-label={`Open ${cardById(id).name}`}
+                onClick={() => setPeek(id)}
+              >
+                <CardFace card={cardById(id)} />
+              </button>
             </li>
           ))}
         </ul>
+        {peekCard && <CardZoom card={peekCard} onClose={() => setPeek(null)} />}
       </div>
     </section>
   );
