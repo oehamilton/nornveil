@@ -5,6 +5,8 @@
   --color-bg: #0c0a08;
   --color-surface: #16130f;
   --color-surface-2: #1f1a15;
+  --color-field: #2c261e;
+  --color-field-border: #7a7064;
   --color-fg: #e8e0d4;
   --color-muted: #8a8074;
   --color-subtle: #5c544c;
@@ -49,6 +51,7 @@
   html {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    color-scheme: dark;
   }
 
   body {
