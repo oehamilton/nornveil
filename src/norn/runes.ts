@@ -226,11 +226,11 @@ export const RUNES: RuneStave[] = [
     phonetic: "Ei",
     meaning: "Yew — the spine between life and the other side.",
     positions: [
-      { x: 64, y: 16 },
-      { x: 36, y: 34 },
+      { x: 70, y: 16 },
+      { x: 30, y: 34 },
       { x: 50, y: 50 },
-      { x: 64, y: 66 },
-      { x: 36, y: 84 },
+      { x: 70, y: 66 },
+      { x: 30, y: 84 },
     ],
     links: [
       [0, 1],

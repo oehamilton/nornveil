@@ -1,4 +1,5 @@
-import type { TarotCard as TarotCardData } from "@/norn/types";
+import { useEffect } from "react";
+import type { DrawnCard, TarotCard as TarotCardData } from "@/norn/types";
 import { cn } from "@/lib/utils";
 
 export function CardBack({ className }: { className?: string }) {
@@ -40,6 +41,63 @@ export function FlippableCard({
         </div>
         <div className="absolute inset-0 [backface-visibility:hidden] [transform:rotateY(180deg)]">
           <CardFace card={card} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function CardDetail({
+  card,
+  note,
+  index,
+  total,
+  onClose,
+}: {
+  card: TarotCardData;
+  note: DrawnCard;
+  index: number;
+  total: number;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-bg/80 px-4 py-8"
+      role="dialog"
+      aria-modal="true"
+      aria-label={card.name}
+      onClick={onClose}
+    >
+      <div
+        className="grid w-full max-w-3xl gap-6 sm:grid-cols-[minmax(0,18rem)_1fr] sm:items-start"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mx-auto aspect-[2/3] w-56 max-w-full sm:w-full">
+          <CardFace card={card} />
+        </div>
+        <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-5">
+          <p className="text-xs uppercase tracking-[0.16em] text-muted">
+            Stave {index + 1} of {total}
+          </p>
+          <h3 className="mt-2 font-display text-3xl">{card.name}</h3>
+          <p className="text-sm italic text-muted">{card.epithet}</p>
+          <p className="mt-4 text-sm leading-relaxed">{note.meaning}</p>
+          {note.weave && <p className="mt-3 text-sm leading-relaxed text-muted">{note.weave}</p>}
+          <button
+            type="button"
+            className="mt-6 inline-flex h-11 items-center rounded-[var(--radius-sm)] border border-border px-4 text-sm hover:bg-surface-2"
+            onClick={onClose}
+          >
+            Return to the stave
+          </button>
         </div>
       </div>
     </div>

@@ -7,8 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { CardBack, CardFace, FlippableCard } from "@/components/norn/TarotCard";
-import { RuneBoardGhost, RuneGuide } from "@/components/norn/RuneGuide";
+import { CardBack, CardDetail, CardFace } from "@/components/norn/TarotCard";
+import { RuneGuide } from "@/components/norn/RuneGuide";
+import { RuneBoard } from "@/components/norn/RuneBoard";
 import { DECK, cardById } from "@/norn/cards";
 import { runeById } from "@/norn/runes";
 import { todayStamp } from "@/norn/seed";
@@ -642,6 +643,7 @@ function SpreadPlay({
   const [dealt, setDealt] = useState(0);
   const [flipped, setFlipped] = useState(0);
   const [readyNext, setReadyNext] = useState(false);
+  const [open, setOpen] = useState<number | null>(null);
 
   useEffect(() => {
     if (dealt !== 0) return;
@@ -654,57 +656,40 @@ function SpreadPlay({
     const t = window.setTimeout(() => {
       setFlipped(dealt);
       setReadyNext(true);
+      setOpen(dealt - 1);
     }, 700);
     return () => window.clearTimeout(t);
   }, [dealt, flipped]);
 
-  const current = flipped > 0 ? reading.cards[flipped - 1] : null;
-  const currentCard = current ? cardById(current.cardId) : null;
   const last = flipped >= reading.cards.length && readyNext;
+  const opened = open != null ? reading.cards[open] : null;
+  const openedCard = opened ? cardById(opened.cardId) : null;
 
   return (
     <section className="space-y-5">
       <RuneGuide runeId={reading.runeId} />
-      <div className="grid gap-8 lg:grid-cols-[1.15fr_0.85fr]">
-      <div className="relative aspect-[4/5] w-full rounded-[var(--radius-xl)] border border-border bg-surface sm:aspect-[5/4]">
-        <RuneBoardGhost rune={rune} />
-        {rune.positions.map((pos, i) => {
-          const note = reading.cards[i];
-          if (!note || i >= dealt) return null;
-          const card = cardById(note.cardId);
-          return (
-            <div
-              key={note.cardId}
-              className="absolute h-[34%] w-[22%] sm:h-[36%] sm:w-[18%]"
-              style={{ left: `${pos.x}%`, top: `${pos.y}%`, transform: "translate(-50%, -50%)" }}
-            >
-              <FlippableCard card={card} flipped={i < flipped} />
-            </div>
-          );
-        })}
-      </div>
-      <aside className="rounded-[var(--radius-lg)] border border-border bg-surface p-5">
-        <p className="text-xs uppercase tracking-[0.16em] text-muted">
-          {rune.glyph} {rune.name}
+      <RuneBoard
+        rune={rune}
+        cards={reading.cards}
+        dealt={dealt}
+        flipped={flipped}
+        onOpen={setOpen}
+      />
+      <div className="mx-auto max-w-lg text-center">
+        <p className="text-sm text-muted">
+          {flipped === 0
+            ? "The first stave is coming to its place."
+            : "Touch a stave to open it."}
         </p>
-        {currentCard && current ? (
-          <>
-            <h3 className="mt-2 font-display text-2xl">{currentCard.name}</h3>
-            <p className="text-sm italic text-muted">{currentCard.epithet}</p>
-            <p className="mt-4 text-sm leading-relaxed">{current.meaning}</p>
-            {current.weave && <p className="mt-3 text-sm leading-relaxed text-muted">{current.weave}</p>}
-            <p className="mt-4 text-xs tabular-nums text-subtle">
-              {flipped} / {reading.cards.length}
-            </p>
-          </>
-        ) : (
-          <p className="mt-6 text-sm text-muted">The first stave is coming to its place.</p>
-        )}
+        <p className="mt-1 text-xs tabular-nums text-subtle">
+          {flipped} / {reading.cards.length}
+        </p>
         {readyNext && !last && (
           <Button
-            className="mt-6 w-full"
+            className="mt-5 w-full"
             onClick={() => {
               setReadyNext(false);
+              setOpen(null);
               setDealt((n) => Math.min(reading.cards.length, Math.max(n, flipped) + 1));
             }}
           >
@@ -712,15 +697,23 @@ function SpreadPlay({
           </Button>
         )}
         {last && (
-          <Button className="mt-6 w-full" onClick={onFinished}>
+          <Button className="mt-5 w-full" onClick={onFinished}>
             Close the well
           </Button>
         )}
         <Button variant="ghost" className="mt-2 w-full" onClick={onLeave}>
           Leave the well
         </Button>
-      </aside>
       </div>
+      {opened && openedCard && open != null && (
+        <CardDetail
+          card={openedCard}
+          note={opened}
+          index={open}
+          total={reading.cards.length}
+          onClose={() => setOpen(null)}
+        />
+      )}
     </section>
   );
 }
@@ -738,27 +731,22 @@ function ReadingDone({
 }) {
   const rune = runeById(reading.runeId);
   const weavingText = reading.summary.trim();
+  const [open, setOpen] = useState<number | null>(null);
+  const opened = open != null ? reading.cards[open] : null;
+  const openedCard = opened ? cardById(opened.cardId) : null;
+
   return (
-    <section className="space-y-5">
+    <section className="space-y-6">
       <RuneGuide runeId={reading.runeId} />
-      <div className="grid gap-8 lg:grid-cols-[1.1fr_0.9fr]">
-      <div className="relative aspect-[4/5] w-full rounded-[var(--radius-xl)] border border-border bg-surface sm:aspect-[5/4]">
-        <RuneBoardGhost rune={rune} />
-        {rune.positions.map((pos, i) => {
-          const note = reading.cards[i];
-          if (!note) return null;
-          return (
-            <div
-              key={note.cardId}
-              className="absolute h-[34%] w-[22%] sm:h-[36%] sm:w-[18%]"
-              style={{ left: `${pos.x}%`, top: `${pos.y}%`, transform: "translate(-50%, -50%)" }}
-            >
-              <FlippableCard card={cardById(note.cardId)} flipped />
-            </div>
-          );
-        })}
-      </div>
-      <div>
+      <RuneBoard
+        rune={rune}
+        cards={reading.cards}
+        dealt={reading.cards.length}
+        flipped={reading.cards.length}
+        onOpen={setOpen}
+      />
+      <p className="text-center text-sm text-muted">Touch a stave to open it.</p>
+      <div className="mx-auto max-w-2xl">
         <p className="text-xs uppercase tracking-[0.16em] text-muted">
           {reading.day} · {rune.name} {rune.glyph}
         </p>
@@ -772,20 +760,6 @@ function ReadingDone({
             <p className="mt-3 text-base leading-relaxed">{weavingText}</p>
           </div>
         )}
-        <ol className="mt-8 space-y-4">
-          {reading.cards.map((note, i) => {
-            const card = cardById(note.cardId);
-            return (
-              <li key={note.cardId}>
-                <p className="font-display text-sm">
-                  {i + 1}. {card.name}
-                </p>
-                <p className="text-sm text-muted">{note.meaning}</p>
-                {note.weave && <p className="mt-1 text-sm text-subtle">{note.weave}</p>}
-              </li>
-            );
-          })}
-        </ol>
         <div className="mt-8 flex flex-col gap-2 sm:flex-row">
           <Button variant="ghost" onClick={onLeave}>
             Back to the hall
@@ -795,7 +769,15 @@ function ReadingDone({
           </Button>
         </div>
       </div>
-      </div>
+      {opened && openedCard && open != null && (
+        <CardDetail
+          card={openedCard}
+          note={opened}
+          index={open}
+          total={reading.cards.length}
+          onClose={() => setOpen(null)}
+        />
+      )}
     </section>
   );
 }
