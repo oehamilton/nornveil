@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { Link } from "@tanstack/react-router";
 import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { beginReading, finishReading, getTodayReading, listReadings } from "@/lib/readings";
+import { beginReading, finishReading, getTodayReading, listReadings, resetTodayReading } from "@/lib/readings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,6 +12,7 @@ import { RuneBoardGhost, RuneGuide } from "@/components/norn/RuneGuide";
 import { DECK, cardById } from "@/norn/cards";
 import { runeById } from "@/norn/runes";
 import { todayStamp } from "@/norn/seed";
+import { localSummary } from "@/norn/weave";
 import type { ReadingRecord } from "@/norn/types";
 
 type Phase =
@@ -86,6 +87,30 @@ export function VeilApp() {
     setPhase("land");
   }
 
+  async function unbindDay() {
+    setBusy(true);
+    setError(null);
+    try {
+      await resetTodayReading();
+      setToday(null);
+      setViewing(null);
+      setPhase("land");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The stave would not lift.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function fallbackSummary(row: ReadingRecord): string {
+    if ((row.summary ?? "").trim()) return row.summary;
+    return localSummary(
+      row.runeId,
+      row.cards.map((c) => c.cardId),
+      row.seeking,
+    );
+  }
+
   return (
     <div className="relative min-h-dvh bg-bg text-fg">
       <div className="veil-grain pointer-events-none absolute inset-0 opacity-[0.18]" />
@@ -127,9 +152,11 @@ export function VeilApp() {
             pending={isPending}
             locked={Boolean(today?.complete)}
             drafted={Boolean(today && !today.complete)}
+            busy={busy}
             onBegin={() => setPhase("intent")}
             onResume={() => setPhase("spread")}
             onOpenToday={() => setPhase("done")}
+            onReset={unbindDay}
           />
         )}
         {phase === "intent" && (
@@ -173,21 +200,40 @@ export function VeilApp() {
             onLeave={leaveWell}
             onFinished={async () => {
               setBusy(true);
+              setPhase("done");
               try {
                 const done = await finishReading({ data: today.id });
-                setToday(done);
-                setArchive((prev) => [done, ...prev.filter((r) => r.id !== done.id)]);
-                setPhase("done");
+                const sealed = { ...done, summary: fallbackSummary(done) };
+                setToday(sealed);
+                setArchive((prev) => [sealed, ...prev.filter((r) => r.id !== sealed.id)]);
               } catch (e) {
+                try {
+                  const again = await getTodayReading();
+                  if (again) {
+                    const sealed = { ...again, summary: fallbackSummary(again), complete: true };
+                    setToday(sealed);
+                    setArchive((prev) => [sealed, ...prev.filter((r) => r.id !== sealed.id)]);
+                  } else {
+                    setToday({ ...today, summary: fallbackSummary(today), complete: true });
+                  }
+                } catch {
+                  setToday({ ...today, summary: fallbackSummary(today), complete: true });
+                }
                 setError(e instanceof Error ? e.message : "The norn fell silent.");
-                setPhase("done");
               } finally {
                 setBusy(false);
               }
             }}
           />
         )}
-        {phase === "done" && shown && <ReadingDone reading={shown} weaving={busy} onLeave={leaveWell} />}
+        {phase === "done" && shown && (
+          <ReadingDone
+            reading={{ ...shown, summary: fallbackSummary(shown) }}
+            weaving={busy}
+            onLeave={leaveWell}
+            onReset={unbindDay}
+          />
+        )}
         {phase === "archive" && (
           <Archive
             rows={archive}
@@ -209,17 +255,21 @@ function Landing({
   pending,
   locked,
   drafted,
+  busy,
   onBegin,
   onResume,
   onOpenToday,
+  onReset,
 }: {
   userName: string | null;
   pending: boolean;
   locked: boolean;
   drafted: boolean;
+  busy: boolean;
   onBegin: () => void;
   onResume: () => void;
   onOpenToday: () => void;
+  onReset: () => void;
 }) {
   return (
     <section className="grid gap-10 pt-6 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
@@ -241,9 +291,19 @@ function Landing({
             <div className="h-12 w-48 animate-pulse rounded-[var(--radius-sm)] bg-surface-2" />
           ) : userName ? (
             locked ? (
-              <Button onClick={onOpenToday}>Open today's stave</Button>
+              <>
+                <Button onClick={onOpenToday}>Open today's stave</Button>
+                <Button variant="ghost" onClick={onReset} disabled={busy}>
+                  {busy ? "Lifting the stave…" : "Unbind this day"}
+                </Button>
+              </>
             ) : drafted ? (
-              <Button onClick={onResume}>Return to the veil</Button>
+              <>
+                <Button onClick={onResume}>Return to the veil</Button>
+                <Button variant="ghost" onClick={onReset} disabled={busy}>
+                  {busy ? "Lifting the stave…" : "Unbind this day"}
+                </Button>
+              </>
             ) : (
               <Button onClick={onBegin}>Step to the well</Button>
             )
@@ -642,12 +702,15 @@ function ReadingDone({
   reading,
   weaving,
   onLeave,
+  onReset,
 }: {
   reading: ReadingRecord;
   weaving: boolean;
   onLeave: () => void;
+  onReset: () => void;
 }) {
   const rune = runeById(reading.runeId);
+  const weavingText = reading.summary.trim();
   return (
     <section className="space-y-5">
       <RuneGuide runeId={reading.runeId} />
@@ -674,10 +737,13 @@ function ReadingDone({
         </p>
         <h2 className="mt-2 font-display text-3xl">The weaving</h2>
         <p className="mt-2 text-sm italic text-muted">&ldquo;{reading.seeking}&rdquo;</p>
-        {weaving && !reading.summary ? (
+        {weaving && !weavingText ? (
           <p className="mt-6 text-sm text-muted">The unnamed norn is still speaking…</p>
         ) : (
-          <p className="mt-6 text-base leading-relaxed">{reading.summary}</p>
+          <div className="mt-6 rounded-[var(--radius-lg)] border border-border bg-surface p-5">
+            <p className="text-xs uppercase tracking-[0.16em] text-muted">Spoken at the well</p>
+            <p className="mt-3 text-base leading-relaxed">{weavingText}</p>
+          </div>
         )}
         <ol className="mt-8 space-y-4">
           {reading.cards.map((note, i) => {
@@ -693,9 +759,14 @@ function ReadingDone({
             );
           })}
         </ol>
-        <Button variant="ghost" className="mt-8" onClick={onLeave}>
-          Back to the hall
-        </Button>
+        <div className="mt-8 flex flex-col gap-2 sm:flex-row">
+          <Button variant="ghost" onClick={onLeave}>
+            Back to the hall
+          </Button>
+          <Button variant="ghost" onClick={onReset}>
+            Ask the well again
+          </Button>
+        </div>
       </div>
       </div>
     </section>

@@ -36,12 +36,17 @@ async function ensureReadingsTable() {
       card_notes  jsonb not null default '[]'::jsonb,
       summary     text not null default '',
       complete    boolean not null default false,
-      created_at  timestamptz not null default now(),
-      unique (user_id, day)
+      active      boolean not null default true,
+      created_at  timestamptz not null default now()
     )
   `);
+  await sql.query(`alter table readings add column if not exists active boolean not null default true`);
+  await sql.query(`alter table readings drop constraint if exists readings_user_id_day_key`);
   await sql.query(`create index if not exists readings_user_id_idx on readings (user_id)`);
   await sql.query(`create index if not exists readings_user_day_idx on readings (user_id, day desc)`);
+  await sql.query(
+    `create index if not exists readings_user_active_day_idx on readings (user_id, day desc) where active`,
+  );
 }
 
 function asIds(value: unknown): string[] {
@@ -94,6 +99,25 @@ function validDay(day: string): string {
   return day;
 }
 
+function grokText(body: unknown): string {
+  const choices = (body as { choices?: { message?: { content?: unknown } }[] })?.choices;
+  const content = choices?.[0]?.message?.content;
+  if (typeof content === "string") return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part === "object" && "text" in part) {
+          return String((part as { text?: unknown }).text ?? "");
+        }
+        return "";
+      })
+      .join("")
+      .trim();
+  }
+  return "";
+}
+
 export const getTodayReading = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
@@ -105,7 +129,8 @@ export const getTodayReading = createServerFn({ method: "GET" })
              birth_time, rune_id, card_ids, card_notes, summary, complete,
              created_at::text as created_at
       from readings
-      where user_id = ${context.userId} and day = ${day}::date
+      where user_id = ${context.userId} and day = ${day}::date and active = true
+      order by created_at desc
       limit 1
     `;
     return rows[0] ? toRecord(rows[0]) : null;
@@ -122,7 +147,7 @@ export const listReadings = createServerFn({ method: "GET" })
              created_at::text as created_at
       from readings
       where user_id = ${context.userId} and complete = true
-      order by day desc
+      order by created_at desc
       limit 40
     `;
     return rows.map(toRecord);
@@ -175,7 +200,8 @@ export const beginReading = createServerFn({ method: "POST" })
              birth_time, rune_id, card_ids, card_notes, summary, complete,
              created_at::text as created_at
       from readings
-      where user_id = ${context.userId} and day = ${data.day}::date
+      where user_id = ${context.userId} and day = ${data.day}::date and active = true
+      order by created_at desc
       limit 1
     `;
     if (existing[0]) return toRecord(existing[0]);
@@ -186,6 +212,7 @@ export const beginReading = createServerFn({ method: "POST" })
       data.seeking,
       data.birthDate ?? "",
       data.birthTime ?? "",
+      String(Date.now()),
     ].join("|");
     const rune = RUNES[pickIndex(seedKey + "|rune", RUNES.length)]!;
     const order = shuffleIds(
@@ -197,7 +224,7 @@ export const beginReading = createServerFn({ method: "POST" })
 
     const rows = await sql<ReadingRow>`
       insert into readings (
-        user_id, day, seeking, birth_date, birth_time, rune_id, card_ids, card_notes, summary, complete
+        user_id, day, seeking, birth_date, birth_time, rune_id, card_ids, card_notes, summary, complete, active
       ) values (
         ${context.userId},
         ${data.day}::date,
@@ -208,7 +235,8 @@ export const beginReading = createServerFn({ method: "POST" })
         ${JSON.stringify(cardIds)}::jsonb,
         ${JSON.stringify(notes)}::jsonb,
         ${""},
-        ${false}
+        ${false},
+        ${true}
       )
       returning id, day::text as day, seeking, birth_date::text as birth_date,
                 birth_time, rune_id, card_ids, card_notes, summary, complete,
@@ -246,49 +274,16 @@ export const finishReading = createServerFn({ method: "POST" })
       ? current.cards
       : buildNotes(asIds(row.card_ids), current.seeking);
 
-    let summary = localSummary(current.runeId, notes.map((n) => n.cardId), current.seeking);
-    const apiKey = process.env.XAI_API_KEY;
-    if (apiKey) {
-      try {
-        const res = await fetch("https://api.x.ai/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            model: "grok-4.5",
-            max_tokens: 380,
-            temperature: 0.8,
-            messages: [
-              {
-                role: "user",
-                content: readingPrompt({
-                  seeking: current.seeking,
-                  birthDate: current.birthDate,
-                  birthTime: current.birthTime,
-                  runeId: current.runeId,
-                  notes,
-                }),
-              },
-            ],
-          }),
-        });
-        if (res.ok) {
-          const body = (await res.json()) as {
-            choices?: { message?: { content?: string } }[];
-          };
-          const text = body.choices?.[0]?.message?.content?.trim();
-          if (text) summary = text;
-        }
-      } catch {
-        // keep local weaving
-      }
-    }
+    const fallback = localSummary(
+      current.runeId,
+      notes.map((n) => n.cardId),
+      current.seeking,
+    );
 
-    const updated = await sql<ReadingRow>`
+    // Persist a weaving immediately so a later Grok timeout still leaves text.
+    const saved = await sql<ReadingRow>`
       update readings
-      set summary = ${summary},
+      set summary = ${fallback},
           card_notes = ${JSON.stringify(notes)}::jsonb,
           complete = true
       where id = ${id} and user_id = ${context.userId}
@@ -296,5 +291,68 @@ export const finishReading = createServerFn({ method: "POST" })
                 birth_time, rune_id, card_ids, card_notes, summary, complete,
                 created_at::text as created_at
     `;
-    return updated[0] ? toRecord(updated[0]) : { ...current, summary, cards: notes, complete: true };
+    let result = saved[0] ? toRecord(saved[0]) : { ...current, summary: fallback, cards: notes, complete: true };
+
+    const apiKey = process.env.XAI_API_KEY;
+    if (!apiKey) return result;
+
+    try {
+      const res = await fetch("https://api.x.ai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        signal: AbortSignal.timeout(8000),
+        body: JSON.stringify({
+          model: "grok-4.5",
+          max_tokens: 380,
+          temperature: 0.8,
+          messages: [
+            {
+              role: "user",
+              content: readingPrompt({
+                seeking: current.seeking,
+                birthDate: current.birthDate,
+                birthTime: current.birthTime,
+                runeId: current.runeId,
+                notes,
+              }),
+            },
+          ],
+        }),
+      });
+      if (!res.ok) return result;
+      const text = grokText(await res.json());
+      if (!text) return result;
+
+      const upgraded = await sql<ReadingRow>`
+        update readings
+        set summary = ${text}
+        where id = ${id} and user_id = ${context.userId}
+        returning id, day::text as day, seeking, birth_date::text as birth_date,
+                  birth_time, rune_id, card_ids, card_notes, summary, complete,
+                  created_at::text as created_at
+      `;
+      if (upgraded[0]) result = toRecord(upgraded[0]);
+      else result = { ...result, summary: text };
+    } catch {
+      // keep the local weaving already saved
+    }
+
+    return result;
+  });
+
+export const resetTodayReading = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    await ensureReadingsTable();
+    const sql = await getSql();
+    const day = todayStamp();
+    await sql`
+      update readings
+      set active = false
+      where user_id = ${context.userId} and day = ${day}::date and active = true
+    `;
+    return { ok: true as const };
   });

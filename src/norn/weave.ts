@@ -48,12 +48,20 @@ export function localSummary(
   const names = cardIds.map((id) => cardById(id).name);
   const last = names[names.length - 1] ?? "the last stave";
   const first = names[0] ?? "the first stave";
+  const mid = names.slice(1, -1);
+  const midLine =
+    mid.length > 0
+      ? `Between them stand ${mid.slice(0, 4).join(", ")}${mid.length > 4 ? ", and the rest of the shape" : ""}.`
+      : "";
   return [
     `The Norns laid ${rune.name} (${rune.glyph}) across your question of ${clip(seeking, 80)}.`,
     `${rune.meaning}`,
     `${first} opened the work; ${last} is where it must be stood.`,
+    midLine,
     `Walk the stave in order. Do not skip a position to reach a kinder card.`,
-  ].join(" ");
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 export function readingPrompt(input: {
