@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { Link } from "@tanstack/react-router";
 import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { beginReading, finishReading, getTodayReading, listReadings, resetTodayReading } from "@/lib/readings";
+import { beginReading, finishReading, getSeekerMark, getTodayReading, listReadings, resetTodayReading } from "@/lib/readings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -44,6 +44,10 @@ export function VeilApp() {
   const [phase, setPhase] = useState<Phase>("land");
   const [today, setToday] = useState<ReadingRecord | null>(null);
   const [archive, setArchive] = useState<ReadingRecord[]>([]);
+  const [mark, setMark] = useState<{ birthDate: string | null; birthTime: string | null }>({
+    birthDate: null,
+    birthTime: null,
+  });
   const [viewing, setViewing] = useState<ReadingRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -56,15 +60,17 @@ export function VeilApp() {
     if (!userId) {
       setToday(null);
       setArchive([]);
+      setMark({ birthDate: null, birthTime: null });
       setPhase("land");
       return;
     }
     let alive = true;
-    Promise.all([getTodayReading(), listReadings()])
-      .then(([now, past]) => {
+    Promise.all([getTodayReading(), listReadings(), getSeekerMark()])
+      .then(([now, past, natal]) => {
         if (!alive) return;
         setToday(now);
         setArchive(past);
+        setMark(natal);
         const here = phaseRef.current;
         if (RITUAL.includes(here)) return;
         if (now?.complete) setPhase("done");
@@ -163,6 +169,8 @@ export function VeilApp() {
           <IntentForm
             busy={busy}
             error={error}
+            savedBirthDate={mark.birthDate ?? today?.birthDate ?? ""}
+            savedBirthTime={mark.birthTime ?? today?.birthTime ?? ""}
             onBack={leaveWell}
             onSubmit={async (payload) => {
               setBusy(true);
@@ -170,6 +178,12 @@ export function VeilApp() {
               try {
                 const row = await beginReading({ data: payload });
                 setToday(row);
+                if (payload.birthDate || payload.birthTime) {
+                  setMark({
+                    birthDate: payload.birthDate ?? null,
+                    birthTime: payload.birthTime ?? null,
+                  });
+                }
                 setPhase("wake");
               } catch (e) {
                 setError(e instanceof Error ? e.message : "The well refused the question.");
@@ -347,17 +361,26 @@ function Landing({
 function IntentForm({
   busy,
   error,
+  savedBirthDate,
+  savedBirthTime,
   onBack,
   onSubmit,
 }: {
   busy: boolean;
   error: string | null;
+  savedBirthDate: string;
+  savedBirthTime: string;
   onBack: () => void;
   onSubmit: (data: { seeking: string; birthDate?: string; birthTime?: string; day: string }) => void;
 }) {
   const [seeking, setSeeking] = useState("");
-  const [birthDate, setBirthDate] = useState("");
-  const [birthTime, setBirthTime] = useState("");
+  const [birthDate, setBirthDate] = useState(savedBirthDate.slice(0, 10));
+  const [birthTime, setBirthTime] = useState(savedBirthTime.slice(0, 5));
+
+  useEffect(() => {
+    if (!birthDate && savedBirthDate) setBirthDate(savedBirthDate.slice(0, 10));
+    if (!birthTime && savedBirthTime) setBirthTime(savedBirthTime.slice(0, 5));
+  }, [savedBirthDate, savedBirthTime, birthDate, birthTime]);
   return (
     <form
       className="mx-auto max-w-lg rounded-[var(--radius-xl)] border border-border bg-surface p-6"
@@ -398,7 +421,11 @@ function IntentForm({
             <Input id="btime" type="time" value={birthTime} onChange={(e) => setBirthTime(e.target.value)} className="mt-2" />
           </div>
         </div>
-        <p className="text-xs text-subtle">Natal hour steadies the stave if you know it. The reading still comes without it.</p>
+        <p className="text-xs text-subtle">
+          {savedBirthDate || savedBirthTime
+            ? "Kept with your signed name. Change it only if it must change."
+            : "Natal hour steadies the stave if you know it. Once entered, it stays with your name."}
+        </p>
       </div>
       {error && <p className="mt-4 text-sm text-danger">{error}</p>}
       <div className="mt-6 flex flex-col gap-2">

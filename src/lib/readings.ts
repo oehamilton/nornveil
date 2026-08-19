@@ -47,6 +47,14 @@ async function ensureReadingsTable() {
   await sql.query(
     `create index if not exists readings_user_active_day_idx on readings (user_id, day desc) where active`,
   );
+  await sql.query(`
+    create table if not exists seeker_marks (
+      user_id     text primary key,
+      birth_date  date,
+      birth_time  text,
+      updated_at  timestamptz not null default now()
+    )
+  `);
 }
 
 function asIds(value: unknown): string[] {
@@ -117,6 +125,70 @@ function grokText(body: unknown): string {
   }
   return "";
 }
+
+function asTime(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const match = /^(\d{2}:\d{2})/.exec(value.trim());
+  return match ? match[1] : null;
+}
+
+function asDay(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const day = String(value).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : null;
+}
+
+export type SeekerMark = {
+  birthDate: string | null;
+  birthTime: string | null;
+};
+
+async function upsertSeekerMark(userId: string, mark: SeekerMark) {
+  const sql = await getSql();
+  await sql`
+    insert into seeker_marks (user_id, birth_date, birth_time, updated_at)
+    values (${userId}, ${mark.birthDate}::date, ${mark.birthTime}, now())
+    on conflict (user_id) do update
+    set birth_date = excluded.birth_date,
+        birth_time = excluded.birth_time,
+        updated_at = now()
+  `;
+}
+
+export const getSeekerMark = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    await ensureReadingsTable();
+    const sql = await getSql();
+    const rows = await sql<{ birth_date: string | null; birth_time: string | null }>`
+      select birth_date::text as birth_date, birth_time
+      from seeker_marks
+      where user_id = ${context.userId}
+      limit 1
+    `;
+    if (rows[0]) {
+      return {
+        birthDate: asDay(rows[0].birth_date),
+        birthTime: asTime(rows[0].birth_time),
+      };
+    }
+    const prior = await sql<{ birth_date: string | null; birth_time: string | null }>`
+      select birth_date::text as birth_date, birth_time
+      from readings
+      where user_id = ${context.userId}
+        and (birth_date is not null or (birth_time is not null and birth_time <> ''))
+      order by created_at desc
+      limit 1
+    `;
+    const mark: SeekerMark = {
+      birthDate: asDay(prior[0]?.birth_date),
+      birthTime: asTime(prior[0]?.birth_time),
+    };
+    if (mark.birthDate || mark.birthTime) {
+      await upsertSeekerMark(context.userId, mark);
+    }
+    return mark;
+  });
 
 export const getTodayReading = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
@@ -205,6 +277,13 @@ export const beginReading = createServerFn({ method: "POST" })
       limit 1
     `;
     if (existing[0]) return toRecord(existing[0]);
+
+    if (data.birthDate || data.birthTime) {
+      await upsertSeekerMark(context.userId, {
+        birthDate: data.birthDate,
+        birthTime: data.birthTime,
+      });
+    }
 
     const seedKey = [
       context.userId,
